@@ -1,4 +1,5 @@
 import { JiraClient } from './jira-client'
+import { buildHolidaySet, holidaysInMonth, type HolidayEntry } from './holidays'
 import {
   buildKpiSummary,
   resolveCapacityFromSprints,
@@ -73,24 +74,55 @@ function truncate(text: string, max: number): string {
   return `${text.slice(0, max - 1)}…`
 }
 
-function printSummary(summary: KpiSummary, outPath: string): void {
+const jakartaDateTimeFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Jakarta',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+})
+
+function formatJakartaDateTime(date: Date | null): string {
+  if (!date) return '-'
+  // en-CA yields YYYY-MM-DD, HH:MM → normalize to "YYYY-MM-DD HH:mm"
+  const parts = jakartaDateTimeFormatter.formatToParts(date)
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === type)?.value ?? ''
+  return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}`
+}
+
+function printSummary(
+  summary: KpiSummary,
+  outPath: string,
+  monthHolidays: HolidayEntry[],
+): void {
   const paddedMonth = String(summary.month).padStart(2, '0')
+  const monthLabel = `${summary.year}-${paddedMonth}`
   const workingDaysLabel =
     summary.totalWorkingDays > 0 ? String(summary.totalWorkingDays) : '0 (default)'
 
   console.log(
-    `Month: ${summary.year}-${paddedMonth} | User: ${summary.userLabel} | Issues: ${summary.tasks.length} (complete: ${summary.completeTasks.length})`,
+    `Month: ${monthLabel} | User: ${summary.userLabel} | Issues: ${summary.tasks.length} (complete: ${summary.completeTasks.length})`,
   )
+  console.log(`Holidays in ${monthLabel}: ${monthHolidays.length}`)
+  for (const holiday of monthHolidays) {
+    console.log(`  - ${holiday.date}  ${holiday.name}`)
+  }
   console.log('')
   console.log(
-    `${'KEY'.padEnd(12)} ${'TITLE'.padEnd(40)} ${'SP'.padStart(4)} ${'LEAD_DAYS'.padStart(10)}`,
+    `${'KEY'.padEnd(12)} ${'TITLE'.padEnd(32)} ${'SP'.padStart(4)} ${'LEAD_DAYS'.padStart(10)} ${'START'.padEnd(16)} ${'END'.padEnd(16)}`,
   )
 
   for (const task of summary.tasks) {
     const sp = task.storyPoints != null ? String(task.storyPoints) : '-'
-    const lead = task.leadTimeDays != null ? String(task.leadTimeDays) : 'N/A'
+    const lead =
+      task.leadTimeDays != null ? task.leadTimeDays.toFixed(1) : 'N/A'
+    const start = formatJakartaDateTime(task.startDate)
+    const end = formatJakartaDateTime(task.endDate)
     console.log(
-      `${task.key.padEnd(12)} ${truncate(task.title, 40).padEnd(40)} ${sp.padStart(4)} ${lead.padStart(10)}`,
+      `${task.key.padEnd(12)} ${truncate(task.title, 32).padEnd(32)} ${sp.padStart(4)} ${lead.padStart(10)} ${start.padEnd(16)} ${end.padEnd(16)}`,
     )
   }
 
@@ -120,6 +152,11 @@ async function main(): Promise<void> {
   const me = await client.getMyself()
   const userLabel = me.emailAddress ?? me.displayName
 
+  const holidayResult = await buildHolidaySet([args.year - 1, args.year, args.year + 1])
+  console.log(
+    `Holidays loaded: ${holidayResult.dates.size} dates (ID library ${holidayResult.libraryCount} +${holidayResult.addedCount} −${holidayResult.removedCount})`,
+  )
+
   console.log(`Fetching issues for ${userLabel}…`)
   const [candidates, closedSprints] = await Promise.all([
     client.searchCandidates(args.year, args.month, me.accountId),
@@ -131,7 +168,7 @@ async function main(): Promise<void> {
     args.year,
     args.month,
   )
-  const capacity = resolveCapacityFromSprints(sprintsInMonth)
+  const capacity = resolveCapacityFromSprints(sprintsInMonth, holidayResult.dates)
   if (capacity.usedDefaultCapacity) {
     console.warn('No closed sprints in month; capacity defaulted to 400')
   }
@@ -142,10 +179,16 @@ async function main(): Promise<void> {
     args.month,
     userLabel,
     sprintsInMonth,
+    holidayResult.dates,
   )
 
   await writeCsv(args.out, summary.completeTasks)
-  printSummary(summary, args.out)
+  const monthHolidays = holidaysInMonth(
+    holidayResult.entries,
+    args.year,
+    args.month,
+  )
+  printSummary(summary, args.out, monthHolidays)
 }
 
 main().catch((error: unknown) => {

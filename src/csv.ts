@@ -22,7 +22,7 @@ export function toCsvRows(completeTasks: TaskMetric[]): CsvRow[] {
     title: task.title,
     start_date: task.startDate ? formatDateUtc(task.startDate) : '',
     end_date: task.endDate ? formatDateUtc(task.endDate) : '',
-    lead_time: task.leadTimeDays != null ? String(task.leadTimeDays) : '',
+    lead_time: task.leadTimeDays != null ? task.leadTimeDays.toFixed(1) : '',
   }))
 }
 

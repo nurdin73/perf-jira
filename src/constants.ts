@@ -7,6 +7,13 @@ export const WORKING_DAYS_PER_CAPACITY = 9
 export const DAILY_STORY_POINT_RATE =
   STORY_POINT_CAPACITY / WORKING_DAYS_PER_CAPACITY
 
+/** Lead-time work schedule (Asia/Jakarta, no DST). */
+export const WORKDAY_TZ = 'Asia/Jakarta'
+export const WORKDAY_UTC_OFFSET_HOURS = 7
+export const WORKDAY_MORNING = { startHour: 8, endHour: 12 } as const
+export const WORKDAY_AFTERNOON = { startHour: 13, endHour: 17 } as const
+export const HALF_DAY_HOUR_THRESHOLD = 4
+
 function lastDayOfMonth(year: number, month: number): number {
   return new Date(Date.UTC(year, month, 0)).getUTCDate()
 }

@@ -1,9 +1,14 @@
 import {
   DAILY_STORY_POINT_RATE,
+  HALF_DAY_HOUR_THRESHOLD,
   IN_PROGRESS_ALIASES,
   STORY_POINT_CAPACITY,
+  WORKDAY_AFTERNOON,
+  WORKDAY_MORNING,
+  WORKDAY_UTC_OFFSET_HOURS,
   monthWindow,
 } from './constants'
+import { toDateKey } from './holidays'
 import type {
   JiraClosedSprint,
   JiraIssueCandidate,
@@ -13,6 +18,17 @@ import type {
 } from './types'
 
 export { STORY_POINT_CAPACITY, DAILY_STORY_POINT_RATE }
+
+const JAKARTA_OFFSET_MS = WORKDAY_UTC_OFFSET_HOURS * 60 * 60 * 1000
+
+type JakartaParts = {
+  year: number
+  month: number
+  day: number
+  hour: number
+  minute: number
+  second: number
+}
 
 function normalizeStatus(name: string): string {
   return name.trim().toLowerCase()
@@ -45,25 +61,151 @@ export function findLeadTimeBounds(
   }
 }
 
-/** Whole calendar-day difference in UTC (resolutiondate − In Progress date). */
-export function calendarDayDiffUtc(start: Date, end: Date): number {
-  const startUtc = Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate())
-  const endUtc = Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate())
-  return Math.round((endUtc - startUtc) / 86_400_000)
+function pad2(n: number): string {
+  return String(n).padStart(2, '0')
 }
 
-/** Inclusive Mon–Fri count between two dates (UTC calendar days). */
-export function countWorkingDays(start: Date, end: Date): number {
+function toJakartaParts(date: Date): JakartaParts {
+  const shifted = new Date(date.getTime() + JAKARTA_OFFSET_MS)
+  return {
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth() + 1,
+    day: shifted.getUTCDate(),
+    hour: shifted.getUTCHours(),
+    minute: shifted.getUTCMinutes(),
+    second: shifted.getUTCSeconds(),
+  }
+}
+
+function fromJakartaLocal(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute = 0,
+  second = 0,
+): Date {
+  return new Date(
+    Date.UTC(year, month - 1, day, hour, minute, second) - JAKARTA_OFFSET_MS,
+  )
+}
+
+function jakartaDateKey(year: number, month: number, day: number): string {
+  return `${year}-${pad2(month)}-${pad2(day)}`
+}
+
+function isJakartaWeekend(year: number, month: number, day: number): boolean {
+  const noon = fromJakartaLocal(year, month, day, 12, 0, 0)
+  const dow = new Date(noon.getTime() + JAKARTA_OFFSET_MS).getUTCDay()
+  return dow === 0 || dow === 6
+}
+
+function isJakartaBusinessDay(
+  year: number,
+  month: number,
+  day: number,
+  holidays: Set<string>,
+): boolean {
+  if (isJakartaWeekend(year, month, day)) return false
+  return !holidays.has(jakartaDateKey(year, month, day))
+}
+
+function overlapHours(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): number {
+  const start = Math.max(aStart.getTime(), bStart.getTime())
+  const end = Math.min(aEnd.getTime(), bEnd.getTime())
+  if (end <= start) return 0
+  return (end - start) / 3_600_000
+}
+
+function effectiveHoursOnJakartaDay(
+  ticketStart: Date,
+  ticketEnd: Date,
+  year: number,
+  month: number,
+  day: number,
+): number {
+  const morningStart = fromJakartaLocal(year, month, day, WORKDAY_MORNING.startHour)
+  const morningEnd = fromJakartaLocal(year, month, day, WORKDAY_MORNING.endHour)
+  const afternoonStart = fromJakartaLocal(year, month, day, WORKDAY_AFTERNOON.startHour)
+  const afternoonEnd = fromJakartaLocal(year, month, day, WORKDAY_AFTERNOON.endHour)
+
+  return (
+    overlapHours(ticketStart, ticketEnd, morningStart, morningEnd) +
+    overlapHours(ticketStart, ticketEnd, afternoonStart, afternoonEnd)
+  )
+}
+
+function dayScoreFromHours(hours: number): number {
+  if (hours <= 0) return 0
+  if (hours < HALF_DAY_HOUR_THRESHOLD) return 0.5
+  return 1
+}
+
+/**
+ * Fractional lead days within work windows 08:00–12:00 + 13:00–17:00 Asia/Jakarta.
+ * Per business day: 0 if no overlap, 0.5 if under 4 effective hours, else 1.
+ */
+export function countFractionalLeadDays(
+  start: Date,
+  end: Date,
+  holidays: Set<string>,
+): number {
+  if (end.getTime() < start.getTime()) return 0
+
+  const startParts = toJakartaParts(start)
+  const endParts = toJakartaParts(end)
+
+  let cursor = fromJakartaLocal(startParts.year, startParts.month, startParts.day, 12)
+  const lastNoon = fromJakartaLocal(endParts.year, endParts.month, endParts.day, 12)
+
+  let total = 0
+  while (cursor.getTime() <= lastNoon.getTime()) {
+    const parts = toJakartaParts(cursor)
+    if (isJakartaBusinessDay(parts.year, parts.month, parts.day, holidays)) {
+      const hours = effectiveHoursOnJakartaDay(
+        start,
+        end,
+        parts.year,
+        parts.month,
+        parts.day,
+      )
+      total += dayScoreFromHours(hours)
+    }
+    cursor = new Date(cursor.getTime() + 86_400_000)
+  }
+
+  return total
+}
+
+function isWeekendUtc(date: Date): boolean {
+  const day = date.getUTCDay()
+  return day === 0 || day === 6
+}
+
+function isBusinessDay(date: Date, holidays: Set<string>): boolean {
+  if (isWeekendUtc(date)) return false
+  return !holidays.has(toDateKey(date))
+}
+
+/** Inclusive Mon–Fri count between two dates (UTC calendar days), minus holidays. */
+export function countBusinessDays(
+  start: Date,
+  end: Date,
+  holidays: Set<string>,
+): number {
   const startUtc = Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate())
   const endUtc = Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate())
   if (endUtc < startUtc) return 0
 
   let count = 0
   for (let cursor = startUtc; cursor <= endUtc; cursor += 86_400_000) {
-    const day = new Date(cursor).getUTCDay() // 0=Sun … 6=Sat
-    if (day !== 0 && day !== 6) count++
+    if (isBusinessDay(new Date(cursor), holidays)) count++
   }
   return count
+}
+
+export function countWorkingDays(start: Date, end: Date): number {
+  return countBusinessDays(start, end, new Set())
 }
 
 export function isResolvedInMonth(
@@ -88,7 +230,10 @@ export function sprintsCompletedInMonth(
   })
 }
 
-export function resolveCapacityFromSprints(sprintsInMonth: JiraClosedSprint[]): {
+export function resolveCapacityFromSprints(
+  sprintsInMonth: JiraClosedSprint[],
+  holidays: Set<string>,
+): {
   closedSprintCount: number
   totalWorkingDays: number
   capacityStoryPoints: number
@@ -101,7 +246,7 @@ export function resolveCapacityFromSprints(sprintsInMonth: JiraClosedSprint[]): 
     if (!sprint.startDate) continue
     const end = sprint.endDate ?? sprint.completeDate
     if (!end) continue
-    totalWorkingDays += countWorkingDays(sprint.startDate, end)
+    totalWorkingDays += countBusinessDays(sprint.startDate, end, holidays)
   }
 
   if (closedSprintCount <= 0 || totalWorkingDays <= 0) {
@@ -138,7 +283,10 @@ export function resolveMetricUnits(issues: JiraIssueCandidate[]): JiraIssueCandi
   return unique
 }
 
-export function toTaskMetric(issue: JiraIssueCandidate): TaskMetric {
+export function toTaskMetric(
+  issue: JiraIssueCandidate,
+  holidays: Set<string>,
+): TaskMetric {
   const { startDate, endDate } = findLeadTimeBounds(
     issue.statusChanges,
     issue.resolutionDate,
@@ -151,7 +299,9 @@ export function toTaskMetric(issue: JiraIssueCandidate): TaskMetric {
     storyPoints: issue.storyPoints,
     startDate,
     endDate,
-    leadTimeDays: isComplete ? calendarDayDiffUtc(startDate, endDate) : null,
+    leadTimeDays: isComplete
+      ? countFractionalLeadDays(startDate, endDate, holidays)
+      : null,
     isComplete,
     parentKey: issue.parentKey,
   }
@@ -163,19 +313,20 @@ export function buildKpiSummary(
   month: number,
   userLabel: string,
   sprintsInMonth: JiraClosedSprint[],
+  holidays: Set<string>,
 ): KpiSummary {
   const filtered = issues.filter((issue) =>
     isResolvedInMonth(issue.resolutionDate, year, month),
   )
   const metricUnits = resolveMetricUnits(filtered)
-  const tasks = metricUnits.map(toTaskMetric)
+  const tasks = metricUnits.map((issue) => toTaskMetric(issue, holidays))
   const completeTasks = tasks.filter((t) => t.isComplete)
 
   const totalStoryPoints = metricUnits.reduce((sum, issue) => {
     return sum + (issue.storyPoints ?? 0)
   }, 0)
 
-  const capacity = resolveCapacityFromSprints(sprintsInMonth)
+  const capacity = resolveCapacityFromSprints(sprintsInMonth, holidays)
   const storyPointPercentage =
     (totalStoryPoints / capacity.capacityStoryPoints) * 100
 

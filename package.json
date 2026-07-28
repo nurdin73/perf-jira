@@ -10,5 +10,8 @@
   "devDependencies": {
     "@types/bun": "latest",
     "typescript": "^5.8.0"
+  },
+  "dependencies": {
+    "date-holidays": "^3.34.0"
   }
 }
