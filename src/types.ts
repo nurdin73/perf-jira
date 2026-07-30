@@ -47,6 +47,8 @@ export type KpiSummary = {
   closedSprintCount: number
   totalWorkingDays: number
   capacityStoryPoints: number
+  capacitySource: 'sprints' | 'month'
+  excludedHolidayDays: number
   storyPointPercentage: number
   averageLeadTimeDays: number | null
 }

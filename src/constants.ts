@@ -14,7 +14,7 @@ export const WORKDAY_MORNING = { startHour: 8, endHour: 12 } as const
 export const WORKDAY_AFTERNOON = { startHour: 13, endHour: 17 } as const
 export const HALF_DAY_HOUR_THRESHOLD = 4
 
-function lastDayOfMonth(year: number, month: number): number {
+export function lastDayOfMonth(year: number, month: number): number {
   return new Date(Date.UTC(year, month, 0)).getUTCDate()
 }
 

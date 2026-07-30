@@ -113,9 +113,11 @@ storyPointPercentage = (totalStoryPoints / capacity) × 100
 ```
 
 - `400` = capacity for a **9 working-day** sprint
-- Business days = Monday–Friday minus hybrid holidays (inclusive sprint range)
+- Business days = Monday–Friday (Asia/Jakarta) minus hybrid holidays (inclusive sprint range)
+- Uses the same Jakarta calendar and holiday set as lead-time calculation
 - If `endDate` is missing → use `completeDate`
-- If no closed sprints / zero working days → capacity defaults to `400` (with a warning)
+- If no closed sprints / zero working days → capacity from **month business days** minus holidays: `businessDaysInMonth × dailyRate` (with a warning)
+- Console shows `Holidays excluded (capacity)` for weekdays removed from the counted range
 
 ### CSV columns
 

@@ -101,7 +101,9 @@ function printSummary(
   const paddedMonth = String(summary.month).padStart(2, '0')
   const monthLabel = `${summary.year}-${paddedMonth}`
   const workingDaysLabel =
-    summary.totalWorkingDays > 0 ? String(summary.totalWorkingDays) : '0 (default)'
+    summary.capacitySource === 'month'
+      ? `${summary.totalWorkingDays} (month fallback)`
+      : String(summary.totalWorkingDays)
 
   console.log(
     `Month: ${monthLabel} | User: ${summary.userLabel} | Issues: ${summary.tasks.length} (complete: ${summary.completeTasks.length})`,
@@ -129,9 +131,15 @@ function printSummary(
   console.log('')
   console.log(`Total story points:      ${summary.totalStoryPoints}`)
   console.log(`Closed sprints in month: ${summary.closedSprintCount}`)
-  console.log(`Working days (sprints):  ${workingDaysLabel}`)
   console.log(
-    `Capacity story points:   ${summary.capacityStoryPoints.toFixed(1)}   // ${summary.totalWorkingDays || 9} * (400/9)`,
+    `Capacity source:         ${summary.capacitySource === 'month' ? 'month (no closed sprints)' : 'sprints'}`,
+  )
+  console.log(
+    `Working days:            ${workingDaysLabel}`,
+  )
+  console.log(`Holidays excluded (capacity): ${summary.excludedHolidayDays}`)
+  console.log(
+    `Capacity story points:   ${summary.capacityStoryPoints.toFixed(1)}   // ${summary.totalWorkingDays} * (400/9)`,
   )
   console.log(
     `Story point percentage:  ${summary.storyPointPercentage.toFixed(1)}%   // (${summary.totalStoryPoints} / ${summary.capacityStoryPoints.toFixed(1)}) * 100`,
@@ -168,9 +176,16 @@ async function main(): Promise<void> {
     args.year,
     args.month,
   )
-  const capacity = resolveCapacityFromSprints(sprintsInMonth, holidayResult.dates)
+  const capacity = resolveCapacityFromSprints(
+    sprintsInMonth,
+    holidayResult.dates,
+    args.year,
+    args.month,
+  )
   if (capacity.usedDefaultCapacity) {
-    console.warn('No closed sprints in month; capacity defaulted to 400')
+    console.warn(
+      `No closed sprints in month; capacity from month business days (${capacity.totalWorkingDays} days, ${capacity.excludedHolidayDays} holidays excluded)`,
+    )
   }
 
   const summary = buildKpiSummary(
